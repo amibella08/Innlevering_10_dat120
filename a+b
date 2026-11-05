@@ -1,0 +1,490 @@
+import csv  # Leser CSV-filen med semikolon som skilletegn.
+from datetime import datetime  # Gjør datoer om til datoobjekter.
+from pathlib import Path  # Finner CSV-filen uavhengig av arbeidsmappen.
+
+# Bibliotek som lager datoaksene og tegner diagrammene.
+import matplotlib.dates as mdates
+import matplotlib.pyplot as plt
+
+
+# Hver stasjon kobles til navnet som vises og filen med målingene.
+STASJONER = {
+    "oslo": ("Oslo - Blindern", "oslo_blindern_1954_2025_med_makstemperatur.csv"),
+    "roeros": ("Røros", "roeros_1954_2025_med_makstemperatur.csv"),
+    "tromsoe": ("Tromsø", "tromsoe_1954_2025_med_makstemperatur.csv"),
+    "venabu": ("Venabu", "venabu_1954_2025_med_makstemperatur.csv"),
+    "vaernes": ("Værnes", "vaernes_1954_2025_med_makstemperatur.csv"),
+}
+
+
+def finn_stasjonsfil(filnavn):
+    # Finn mappen der denne Python-filen ligger.
+    programmappe = Path(__file__).parent
+
+    # Se etter CSV-filen ved siden av programmet.
+    filsti = programmappe / filnavn
+    if filsti.is_file():
+        return filsti
+
+    # Se også i nabomapper der datafilene kan være pakket ut.
+    for mappe in programmappe.parent.glob(
+        "*_flere_vaerstasjoner_med_makstemperatur.zip.*"
+    ):
+        # Bygg en mulig filsti og bruk den hvis filen finnes.
+        filsti = mappe / filnavn
+        if filsti.is_file():
+            return filsti
+
+    # Stopp med en tydelig feil hvis filen ikke finnes noen av stedene.
+    raise FileNotFoundError(f"Fant ikke filen {filnavn}.")
+
+
+def les_tall(tekst):
+    # Fjern mellomrom rundt verdien fra CSV-filen.
+    tekst = tekst.strip()
+
+    # Tomt felt og bindestrek betyr at målingen mangler.
+    if tekst == "" or tekst == "-":
+        return None
+
+    # Bytt desimalkomma til punktum før tallet konverteres.
+    tekst = tekst.replace(",", ".")
+    return float(tekst)
+
+
+def les_data(filsti):
+    # Liste som fylles med målingene fra CSV-filen.
+    data = []
+
+    # utf-8-sig håndterer et eventuelt BOM-tegn først i CSV-filen.
+    with filsti.open(encoding="utf-8-sig", newline="") as fil:
+        # CSV-filen bruker semikolon mellom kolonnene.
+        leser = csv.reader(fil, delimiter=";")
+        next(leser, None)  # Hopp over overskriftsraden.
+
+        for rad in leser:
+            # Hopp over tomme rader og tekst etter værdataene.
+            if len(rad) < 8 or rad[2].strip() == "":
+                continue
+
+            # Lagre dato og de fire værmålingene som trengs i oppgavene.
+            # Kolonne 3 er maks temperatur, 4 middeltemperatur, 5 nedbør,
+            # 6 vind og 7 snødybde. Kolonnenummereringen starter på null.
+            dag = {
+                "dato": datetime.strptime(rad[2], "%d.%m.%Y"),
+                "maks_temp": les_tall(rad[3]),
+                "middeltemp": les_tall(rad[4]),
+                "nedbor": les_tall(rad[5]),
+                "vind": les_tall(rad[6]),
+                "sno": les_tall(rad[7]),
+            }
+            data.append(dag)
+
+    # Gi en feil i stedet for å fortsette med tomme data.
+    if len(data) == 0:
+        raise ValueError(f"Fant ingen værdata i {filsti}")
+
+    # Noen av CSV-filene er ikke sortert etter dato.
+    # Sortering gjør at plottene vises i riktig tidsrekkefølge.
+    data.sort(key=lambda dag: dag["dato"])
+    return data
+
+
+def plott_dagsdata(data, valgt_aar, stasjon):
+    # Liste med målingene for det valgte året.
+    dagsdata = []
+    for dag in data:
+        # Ta bare med dager som hører til året brukeren valgte.
+        if dag["dato"].year == valgt_aar:
+            dagsdata.append(dag)
+
+    # Kontroller at stasjonen har målinger for det valgte året.
+    if len(dagsdata) == 0:
+        raise ValueError(f"Det finnes ingen data for {valgt_aar}.")
+
+    # Lister med datoer og verdier som skal tegnes i plottene.
+    datoer = []
+    for dag in dagsdata:
+        datoer.append(dag["dato"])
+
+    # Lag fire diagrammer oppå hverandre og la dem dele datoaksen.
+    fig, akser = plt.subplots(4, 1, figsize=(12, 10), sharex=True)
+    fig.suptitle(f"Værdata per dag på {stasjon} i {valgt_aar}")
+
+    # Snødybde per dag.
+    snodybder = []
+    for dag in dagsdata:
+        # NaN lager et tomrom i linjen der en verdi mangler.
+        if dag["sno"] is None:
+            snodybder.append(float("nan"))
+        else:
+            snodybder.append(dag["sno"])
+    # Tegn snødybden mot dato og gi diagrammet tittel, enhet og rutenett.
+    akser[0].plot(datoer, snodybder)
+    akser[0].set_title("Snødybde")
+    akser[0].set_ylabel("Snødybde (cm)")
+    akser[0].grid(True)
+
+    # Nedbør per dag.
+    nedbor = []
+    for dag in dagsdata:
+        # Bruk NaN for manglende data, slik at grafen viser et opphold.
+        if dag["nedbor"] is None:
+            nedbor.append(float("nan"))
+        else:
+            nedbor.append(dag["nedbor"])
+    # Tegn nedbørsmålingene og merk aksene.
+    akser[1].plot(datoer, nedbor)
+    akser[1].set_title("Nedbør")
+    akser[1].set_ylabel("Nedbør (mm)")
+    akser[1].grid(True)
+
+    # Middeltemperatur per dag.
+    middeltemperaturer = []
+    for dag in dagsdata:
+        # Bruk NaN for manglende data, slik at grafen viser et opphold.
+        if dag["middeltemp"] is None:
+            middeltemperaturer.append(float("nan"))
+        else:
+            middeltemperaturer.append(dag["middeltemp"])
+    # Tegn middeltemperaturene og merk aksene.
+    akser[2].plot(datoer, middeltemperaturer)
+    akser[2].set_title("Middeltemperatur")
+    akser[2].set_ylabel("Temperatur (°C)")
+    akser[2].grid(True)
+
+    # Høyeste middelvind per dag.
+    vindstyrker = []
+    for dag in dagsdata:
+        # Bruk NaN for manglende data, slik at grafen viser et opphold.
+        if dag["vind"] is None:
+            vindstyrker.append(float("nan"))
+        else:
+            vindstyrker.append(dag["vind"])
+    # Tegn vindmålingene og merk aksene.
+    akser[3].plot(datoer, vindstyrker)
+    akser[3].set_title("Høyeste middelvind")
+    akser[3].set_ylabel("Vind (m/s)")
+    akser[3].grid(True)
+
+    # Velg datoetiketter automatisk, så datoene blir lette å lese.
+    datovelger = mdates.AutoDateLocator()
+    akser[3].xaxis.set_major_locator(datovelger)
+    akser[3].xaxis.set_major_formatter(
+        mdates.ConciseDateFormatter(datovelger)
+    )
+
+    # Juster avstandene så titler og akseetiketter ikke overlapper.
+    fig.tight_layout()
+    return fig
+
+
+def beregn_manedstall(data):
+    # Samle alle dagsradene som hører til samme år og måned.
+    dager_per_maned = {}
+    for dag in data:
+        # År og måned sammen gir en unik nøkkel, for eksempel (2020, 1).
+        aar = dag["dato"].year
+        maned = dag["dato"].month
+        nokkel = (aar, maned)
+
+        # Opprett en tom liste første gang vi møter denne måneden.
+        if nokkel not in dager_per_maned:
+            dager_per_maned[nokkel] = []
+
+        # Legg dagens målinger til riktig måned.
+        dager_per_maned[nokkel].append(dag)
+
+    # Liste med ferdig beregnede verdier for hver måned.
+    manedstall = []
+
+    # Regn ut verdiene for én måned om gangen.
+    for nokkel in sorted(dager_per_maned):
+        # Hent år, måned og alle dagene som tilhører perioden.
+        aar = nokkel[0]
+        maned = nokkel[1]
+        dager = dager_per_maned[nokkel]
+
+        # Lag egne lister, slik at maks/min/sum kan regnes ut etterpå.
+        snodybder = []
+        nedborsmalinger = []
+        middeltemperaturer = []
+        vindstyrker = []
+
+        for dag in dager:
+            # Manglende verdier tas ikke med i beregningene.
+            if dag["sno"] is not None:
+                snodybder.append(dag["sno"])
+            if dag["nedbor"] is not None:
+                nedborsmalinger.append(dag["nedbor"])
+            if dag["middeltemp"] is not None:
+                middeltemperaturer.append(dag["middeltemp"])
+            if dag["vind"] is not None:
+                vindstyrker.append(dag["vind"])
+
+        # Finn månedens største snødybde hvis det finnes målinger.
+        if len(snodybder) > 0:
+            maks_snodybde = max(snodybder)
+        else:
+            maks_snodybde = None
+
+        # Nedbør summeres bare hvis måneden har mer enn 20 målinger.
+        if len(nedborsmalinger) > 20:
+            total_nedbor = sum(nedborsmalinger)
+        else:
+            total_nedbor = None
+
+        # Finn høyeste og laveste middeltemperatur for måneden.
+        if len(middeltemperaturer) > 0:
+            maks_middeltemp = max(middeltemperaturer)
+            min_middeltemp = min(middeltemperaturer)
+        else:
+            maks_middeltemp = None
+            min_middeltemp = None
+
+        # Finn månedens høyeste middelvind hvis det finnes målinger.
+        if len(vindstyrker) > 0:
+            maks_vind = max(vindstyrker)
+        else:
+            maks_vind = None
+
+        # Lagre de ferdig beregnede verdiene med månedens første dato.
+        manedstall.append({
+            "dato": datetime(aar, maned, 1),
+            "maks_snodybde": maks_snodybde,
+            "total_nedbor": total_nedbor,
+            "maks_middeltemp": maks_middeltemp,
+            "min_middeltemp": min_middeltemp,
+            "maks_vind": maks_vind,
+        })
+
+    return manedstall
+
+
+def tell_varme_dager(data):
+    # Hvert år får tellere for sommer-, høysommer- og tropedager.
+    # Ordbok som lagrer tellerne for hvert år.
+    antall_per_aar = {}
+
+    for dag in data:
+        # Bruk året som nøkkel, slik at dagene telles i riktig år.
+        aar = dag["dato"].year
+
+        # Start alle tellerne på null når et år dukker opp første gang.
+        if aar not in antall_per_aar:
+            antall_per_aar[aar] = {
+                "sommerdager": 0,
+                "hoysommerdager": 0,
+                "tropedager": 0,
+            }
+
+        temperatur = dag["maks_temp"]
+        if temperatur is not None:
+            # Nøyaktig 20, 25 og 30 grader passer ikke i neste kategori.
+            if temperatur > 20:
+                antall_per_aar[aar]["sommerdager"] += 1
+            if temperatur > 25:
+                antall_per_aar[aar]["hoysommerdager"] += 1
+            if temperatur > 30:
+                antall_per_aar[aar]["tropedager"] += 1
+
+    # Liste med opptellingene, sortert etter år.
+    # Gjør opptellingene om til en sortert liste som er enkel å plotte.
+    aarstall = []
+    for aar in sorted(antall_per_aar):
+        aarstall.append({
+            "aar": aar,
+            "sommerdager": antall_per_aar[aar]["sommerdager"],
+            "hoysommerdager": antall_per_aar[aar]["hoysommerdager"],
+            "tropedager": antall_per_aar[aar]["tropedager"],
+        })
+
+    return aarstall
+
+
+def plott_varme_dager(data, stasjon):
+    # Hent antall sommer-, høysommer- og tropedager for hvert år.
+    aarstall = tell_varme_dager(data)
+
+    # Lister med årstall og antall dager til årsplottet.
+    aar = []
+    sommerdager = []
+    hoysommerdager = []
+    tropedager = []
+
+    for resultat in aarstall:
+        # Flytt verdiene til separate lister for plottefunksjonen.
+        aar.append(resultat["aar"])
+        sommerdager.append(resultat["sommerdager"])
+        hoysommerdager.append(resultat["hoysommerdager"])
+        tropedager.append(resultat["tropedager"])
+
+    # Lag ett diagram med en linje for hver type varm dag.
+    fig, akse = plt.subplots(figsize=(12, 6))
+    akse.plot(aar, sommerdager, label="Sommerdager (> 20 °C)")
+    akse.plot(aar, hoysommerdager, label="Høysommerdager (> 25 °C)")
+    akse.plot(aar, tropedager, label="Tropedager (> 30 °C)")
+
+    # Legg til tittel, aksebeskrivelser, rutenett og forklaring.
+    akse.set_title(f"b) Varme dager per år på {stasjon}")
+    akse.set_xlabel("År")
+    akse.set_ylabel("Antall dager")
+    akse.grid(True)
+    akse.legend()
+
+    fig.tight_layout()
+    return fig
+
+
+def plott_manedstall(data, stasjon):
+    # Regn først ut verdiene som skal vises per måned.
+    manedstall = beregn_manedstall(data)
+
+    # Liste med datoene som brukes på månedsplottets x-akse.
+    datoer = []
+    for maned in manedstall:
+        datoer.append(maned["dato"])
+
+    # Bruk første og siste dato for å vise tidsrommet i tittelen.
+    forste_aar = datoer[0].year
+    siste_aar = datoer[-1].year
+
+    # Lag fire diagrammer med felles tidsakse.
+    fig, akser = plt.subplots(4, 1, figsize=(13, 12), sharex=True)
+    fig.suptitle(
+        f"Værdata per måned på {stasjon} ({forste_aar}–{siste_aar})"
+    )
+
+    # Lister med månedsverdier til hvert diagram.
+    maks_snodybder = []
+    nedborssummer = []
+    maks_vindstyrker = []
+    maks_middeltemperaturer = []
+    min_middeltemperaturer = []
+
+    for maned in manedstall:
+        # Matplotlib viser NaN som et tomrom i grafen.
+        if maned["maks_snodybde"] is None:
+            maks_snodybder.append(float("nan"))
+        else:
+            maks_snodybder.append(maned["maks_snodybde"])
+
+        if maned["total_nedbor"] is None:
+            nedborssummer.append(float("nan"))
+        else:
+            nedborssummer.append(maned["total_nedbor"])
+
+        if maned["maks_vind"] is None:
+            maks_vindstyrker.append(float("nan"))
+        else:
+            maks_vindstyrker.append(maned["maks_vind"])
+
+        maks_middeltemperaturer.append(maned["maks_middeltemp"])
+        min_middeltemperaturer.append(maned["min_middeltemp"])
+
+    # Tegn én graf per værtype og legg til forklarende akseetiketter.
+    akser[0].plot(datoer, maks_snodybder)
+    akser[0].set_title("Maksimal snødybde per måned")
+    akser[0].set_ylabel("Snødybde (cm)")
+    akser[0].grid(True)
+
+    akser[1].plot(datoer, nedborssummer)
+    akser[1].set_title("Total nedbør per måned")
+    akser[1].set_ylabel("Nedbør (mm)")
+    akser[1].grid(True)
+
+    akser[2].plot(
+        datoer, maks_middeltemperaturer, label="Maks middeltemperatur"
+    )
+    akser[2].plot(
+        datoer, min_middeltemperaturer, label="Min middeltemperatur"
+    )
+    akser[2].set_title("Maksimum og minimum middeltemperatur per måned")
+    akser[2].set_ylabel("Temperatur (°C)")
+    akser[2].grid(True)
+    akser[2].legend()
+
+    akser[3].plot(datoer, maks_vindstyrker)
+    akser[3].set_title("Maksimal middelvind per måned")
+    akser[3].set_ylabel("Vind (m/s)")
+    akser[3].grid(True)
+
+    # Finn måneder der færre enn 21 nedbørsmålinger gjør summen usikker.
+    # Liste over måneder uten nok nedbørsmålinger.
+    manglende_nedborsdatoer = []
+    for maned in manedstall:
+        if maned["total_nedbor"] is None:
+            manglende_nedborsdatoer.append(maned["dato"])
+
+    # Vis røde kryss for disse månedene i nedbørsdiagrammet.
+    if len(manglende_nedborsdatoer) > 0:
+        akser[1].scatter(
+            manglende_nedborsdatoer,
+            [0.97] * len(manglende_nedborsdatoer),
+            marker="x",
+            color="red",
+            transform=akser[1].get_xaxis_transform(),
+            label="Ikke registrert (20 eller færre målinger)",
+        )
+        akser[1].legend()
+
+    # Velg datoetiketter automatisk for den lange tidsserien.
+    datovelger = mdates.AutoDateLocator()
+    akser[3].xaxis.set_major_locator(datovelger)
+    akser[3].xaxis.set_major_formatter(
+        mdates.ConciseDateFormatter(datovelger)
+    )
+
+    # Juster avstandene mellom diagrammene før figuren vises.
+    fig.tight_layout()
+    return fig
+
+
+def hovedprogram():
+    # Vis tilgjengelige stasjoner så brukeren kan velge en.
+    print("Velg stasjon:")
+    for valg in STASJONER:
+        stasjonsnavn = STASJONER[valg][0]
+        print(f"- {valg}: {stasjonsnavn}")
+
+    # Be om et valg til brukeren skriver inn et gyldig stasjonsnavn.
+    stasjonsvalg = input("Skriv inn stasjonsvalget: ").strip().lower()
+    while stasjonsvalg not in STASJONER:
+        print("Ugyldig valg. Velg en stasjon fra listen.")
+        stasjonsvalg = input("Skriv inn stasjonsvalget: ").strip().lower()
+
+    # Hent stasjonsnavn og filnavn, finn filen og les målingene.
+    stasjonsnavn = STASJONER[stasjonsvalg][0]
+    filnavn = STASJONER[stasjonsvalg][1]
+    filsti = finn_stasjonsfil(filnavn)
+    data = les_data(filsti)
+
+    # Liste over årstallene som finnes for den valgte stasjonen.
+    aar_med_data = []
+    for dag in data:
+        aar = dag["dato"].year
+        if aar not in aar_med_data:
+            aar_med_data.append(aar)
+    aar_med_data.sort()
+
+    # Be om et årstall, og kontroller at stasjonen har data for det året.
+    aarstekst = input(
+        f"Skriv inn et årstall ({aar_med_data[0]}–{aar_med_data[-1]}): "
+    )
+    while not aarstekst.isdigit() or int(aarstekst) not in aar_med_data:
+        print("Velg et år som har data for denne stasjonen.")
+        aarstekst = input(
+            f"Skriv inn et årstall ({aar_med_data[0]}–{aar_med_data[-1]}): "
+        )
+    valgt_aar = int(aarstekst)
+
+    # Lag de tre oppgaveplottene og vis dem i ett vindu.
+    plott_dagsdata(data, valgt_aar, stasjonsnavn)
+    plott_manedstall(data, stasjonsnavn)
+    plott_varme_dager(data, stasjonsnavn)
+    plt.show()
+
+
+# Start hovedprogrammet bare når denne filen kjøres direkte.
+if __name__ == "__main__":
+    hovedprogram()
